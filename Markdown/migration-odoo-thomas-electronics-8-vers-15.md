@@ -79,7 +79,7 @@ select \* from res\_groups\_users\_rel where gid IN (9, 10, 1) order by uid,gid;
 ```
 Si c’est le cas, il faut l’enlever des groupes en trop :
 ```
-delete from res\_groups\_users\_rel where gid=10;
+delete from res_groups_users_rel where gid=10;
 1. # ***Impossible d’afficher une commande après l’avoir créée manuellement***
    Cela est lié à la mauvaise migration des emplacements des articles résolu ci-dessous
 1. # ***Erreur en affichant la liste des articles ou un article en particulier***

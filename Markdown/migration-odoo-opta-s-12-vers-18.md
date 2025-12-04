@@ -220,3 +220,25 @@ proposition_ids = fields.Many2many('ir.attachment', 'is_affaire_propositions_rel
 cf `init_res_id_ir_attachment_Many2many` pour résoudre ce problème
 
 
+
+Comme j'avais également ce soucis après la migration le 03/09/2025, j'ai du lancer cette requête pour initialiser les PJ:
+
+```UPDATE ir_attachment a SET res_id = (SELECT MIN(doc_id) FROM is_frais_justificatif_rel WHERE file_id=a.id) WHERE a.res_model='is.frais' and res_id=0;```
+
+
+```
+UPDATE ir_attachment a                                                                                         
+SET res_id = x.affaire_id
+FROM (
+  SELECT file_id AS att_id, MIN(doc_id) AS affaire_id
+  FROM (
+    SELECT file_id, doc_id FROM is_affaire_propositions_rel
+    UNION ALL
+    SELECT file_id, doc_id FROM is_affaire_convention_rel
+  ) r
+  GROUP BY file_id
+) x
+WHERE a.id = x.att_id
+  AND a.res_model = 'is.affaire'
+  AND (a.res_id IS NULL OR a.res_id = 0);
+```

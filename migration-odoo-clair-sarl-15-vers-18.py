@@ -32,26 +32,7 @@ debut = Log(debut, "Début migration")
 
 
 
-# wkhtmltopdf *****************************************************************
-SQL="""
-  INSERT INTO ir_config_parameter (key, value) VALUES ('web_m2x_options.create', 'False')      ON CONFLICT DO NOTHING;
-  INSERT INTO ir_config_parameter (key, value) VALUES ('web_m2x_options.create_edit', 'False') ON CONFLICT DO NOTHING;
-  INSERT INTO ir_config_parameter (key, value) VALUES ('web_m2x_options.limit', '10')          ON CONFLICT DO NOTHING;
-"""
-cr_dst.execute(SQL)
-cnx_dst.commit()
-#******************************************************************************
-
-# clair-sarl15=# select * from ir_config_parameter where key like 'web_m2%';
-#  id |             key             | value | create_uid |        create_date         | write_uid |         write_date         
-# ----+-----------------------------+-------+------------+----------------------------+-----------+----------------------------
-#  25 | web_m2x_options.create      | False |          2 | 2023-11-24 12:03:28.628196 |         2 | 2023-11-24 12:03:28.628196
-#  26 | web_m2x_options.create_edit | False |          2 | 2023-11-24 12:03:41.964668 |         2 | 2023-11-24 12:03:41.964668
-#  27 | web_m2x_options.limit       | 10    |          2 | 2023-11-24 12:03:57.879269 |         2 | 2023-11-24 12:03:57.879269
-
-
-
-sys.exit()
+#sys.exit()
 
 
 
@@ -113,13 +94,34 @@ table="account_payment_term"
 default = {
 }
 MigrationTable(db_src,db_dst,table,default=default,text2jsonb=True)
+#******************************************************************************
+
+#** account_payment_term_line *************************************************
 table="account_payment_term_line"
 default = {
     'delay_type': 'days_after',
 }
 rename={
+    'days': 'nb_days'
 }
 MigrationTable(db_src,db_dst,table,default=default,rename=rename)
+SQL="select * from account_payment_term_line"
+cr_src.execute(SQL)
+rows = cr_src.fetchall()
+for row in rows:
+    delay_type="days_after"
+    days_next_month = None
+    day_of_the_month =  row['day_of_the_month']
+    if day_of_the_month:
+        if day_of_the_month==31:
+            delay_type='day_after_invoice_date'
+            days_next_month = day_of_the_month
+        if day_of_the_month>0 and day_of_the_month<31:
+            delay_type='days_end_of_month_on_the'
+            days_next_month = day_of_the_month
+    SQL="UPDATE account_payment_term_line SET delay_type=%s, days_next_month=%s, value='percent', value_amount=100 WHERE id=%s"
+    cr_dst.execute(SQL,[delay_type,days_next_month,row['id']])
+cnx_dst.commit()
 #******************************************************************************
 
 #** Mettre le compte 512xxx pour les réglements par défaut ********************
@@ -676,17 +678,10 @@ MigrationTable(db_src,db_dst,'product_supplierinfo',rename=rename)
 #******************************************************************************
 
 
-
-   
 #** uom  **********************************************************************
 MigrationTable(db_src,db_dst, "uom_category",text2jsonb=True)
 MigrationTable(db_src,db_dst, "uom_uom",text2jsonb=True)
 #******************************************************************************
-
-
-
-
-
 
 
 #** res_company ***************************************************************
@@ -703,17 +698,22 @@ MigrationDonneesTable(db_src,db_dst,'res_company')
 #******************************************************************************
 
 
+# wkhtmltopdf *****************************************************************
+SQL="""
+  INSERT INTO ir_config_parameter (key, value) VALUES ('web_m2x_options.create', 'False')      ON CONFLICT DO NOTHING;
+  INSERT INTO ir_config_parameter (key, value) VALUES ('web_m2x_options.create_edit', 'False') ON CONFLICT DO NOTHING;
+  INSERT INTO ir_config_parameter (key, value) VALUES ('web_m2x_options.limit', '10')          ON CONFLICT DO NOTHING;
+"""
+cr_dst.execute(SQL)
+cnx_dst.commit()
+#******************************************************************************
 
 
-
-
-
-
-
-
-
-
-
+# Requetes diverses ***********************************************************
+SQL = "delete from res_groups_users_rel where uid not in (select id from res_users);"
+cr_dst.execute(SQL)
+cnx_dst.commit()
+#******************************************************************************
 
 
 debut = Log(debut, "Fin migration")

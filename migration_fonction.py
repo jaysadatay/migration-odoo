@@ -559,6 +559,7 @@ def SetDefaultValue(db,model,field_name,account_code):
     field_id = GetFielsdId(cr,model,field_name)
     account_id = JsonAccountCode2Id(cr,account_code) 
     SQL="UPDATE ir_default SET json_value=%s WHERE field_id=%s"
+
     cr.execute(SQL,[account_id,field_id])
     cnx.commit()
 

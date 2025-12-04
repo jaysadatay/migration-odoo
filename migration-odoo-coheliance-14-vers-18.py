@@ -29,6 +29,12 @@ debut=datetime.now()
 debut = Log(debut, "Début migration")
 
 
+
+
+#sys.exit()
+
+
+
 #** res_partner ***************************************************************
 MigrationTable(db_src,db_dst,'res_partner_title',text2jsonb=True)
 default={
@@ -53,6 +59,56 @@ cnx_dst.commit()
 MigrationTable(db_src,db_dst,'res_company_users_rel')
 MigrationResGroups(db_src,db_dst)
 # #****************************************************************************
+
+#** res_groups_users_rel : Ajoute des utilisateurs dans les nouveaux groupes **
+AddUserGroupToOtherGroup(db_dst, "group_user"           , "group_allow_export")     # Export pour employés
+AddUserGroupToOtherGroup(db_dst, "group_account_manager", "group_account_readonly") # Compta complète pour comptable
+AddUserGroupToOtherGroup(db_dst, "group_account_manager", "group_account_user")     # Compta complète pour comptable
+#******************************************************************************
+
+#** L'utilisateur ne peut pas avoir plus d'un type d'utilisateur **************
+#** Recherche des types d'uilisateurs
+SQL="select id,name->>'en_US' as name from ir_module_category where name->>'en_US'='User types'" # where name->>'en_US'='User types'"
+cr_dst.execute(SQL)
+rows = cr_dst.fetchall()
+category_id=False
+for row in rows:
+    category_id=row["id"]
+if category_id:
+    # ** Recherche des utilisateurs avec plusieurs types
+    SQL="""
+        SELECT uid, array_agg(gid ORDER BY gid) as gids
+        FROM res_groups_users_rel
+        WHERE gid IN (
+                SELECT id FROM res_groups WHERE category_id=%s
+            )
+        GROUP BY uid
+        HAVING count(*) > 1;
+    """
+    cr_dst.execute(SQL,[category_id])
+    rows = cr_dst.fetchall()
+    for row in rows:
+        print(row)
+    #** Si il a plusieurs types, il faut lui mettre le id le plus petit uniquement
+    SQL="""
+        DELETE FROM res_groups_users_rel r
+        USING (                  
+            SELECT uid, min(gid) AS keep_gid
+            FROM res_groups_users_rel
+            WHERE gid IN (
+                SELECT id FROM res_groups WHERE category_id=75
+            )
+            GROUP BY uid
+        ) AS sub
+        WHERE r.uid = sub.uid
+        AND r.gid IN (
+            SELECT id FROM res_groups WHERE category_id=75
+        )
+        AND r.gid <> sub.keep_gid;
+    """
+    cr_dst.execute(SQL,[category_id])
+    cnx_dst.commit()
+#******************************************************************************
 
 #** res_currency **************************************************************
 MigrationTable(db_src,db_dst,'res_currency',text2jsonb=True)
@@ -132,6 +188,40 @@ cr_dst.execute(SQL)
 cnx_dst.commit()
 #******************************************************************************
 
+#** Ajout des paiements entrant et sortant dans les journaux ******************
+SQL="select id,code,payment_type,name->>'fr_FR' from account_payment_method;"
+cr_dst.execute(SQL)
+rows = cr_dst.fetchall()
+payment_method_inbound_id = payment_method_outbound_id = False
+for row in rows:
+    if row['payment_type']=='inbound':
+        payment_method_inbound_id = row['id']
+    if row['payment_type']=='outbound':
+        payment_method_outbound_id = row['id']
+if payment_method_inbound_id and payment_method_outbound_id:
+    SQL="""
+        select id,code,name->>'fr_FR' name,type 
+        from account_journal 
+        where type IN ('bank', 'cash', 'credit') order by id;
+    """
+    cr_dst.execute(SQL)
+    rows = cr_dst.fetchall()
+
+    for row in rows:
+        journal_id = row['id']
+        SQL="DELETE FROM account_payment_method_line WHERE journal_id=%s"
+        cr_dst.execute(SQL,[journal_id])
+        SQL="""
+            INSERT INTO account_payment_method_line (journal_id, payment_method_id, name, sequence, create_uid, write_uid, create_date, write_date)
+            VALUES 
+            (%s, %s, 'Manuel', 10, 2, 2, NOW(), NOW()),  -- Méthode inbound
+            (%s, %s, 'Manuel', 10, 2, 2, NOW(), NOW());  -- Méthode outbound
+        """
+
+        cr_dst.execute(SQL,[journal_id, payment_method_inbound_id, journal_id, payment_method_outbound_id])
+    cnx_dst.commit()
+#******************************************************************************
+
 #account_payment_term *********************************************************
 table="account_payment_term"
 default = {
@@ -154,6 +244,23 @@ MigrationTable(db_src,db_dst,table,default=default,rename=rename)
 # cr_dst.execute(SQL,[account_id])
 # cnx_dst.commit()
 # #******************************************************************************
+
+
+
+#** account_journal ***********************************************************
+SQL="""
+    update account_journal set default_account_id=(select id from account_account where code_store->>'1'='707100') where code='SAJ';
+    update account_journal set default_account_id=(select id from account_account where code_store->>'1'='607100') where code='EXJ';
+"""
+cr_dst.execute(SQL)
+cnx_dst.commit()
+#******************************************************************************
+
+
+
+
+
+
 
 
 
@@ -194,25 +301,45 @@ cnx_dst.commit()
 
 
 
-# #** account_account : internal_group => account_type **************************
-# mydict={
-#     'liability': 'liability_payable',
-#     'equity'   : 'equity',
-#     'expense'  : 'expense',
-#     'income'   : 'income',
-#     'asset'    : 'asset_receivable',
-# }
-# SQL="SELECT id,internal_group FROM account_account order by internal_group"
-# cr_src.execute(SQL)
-# rows = cr_src.fetchall()
-# for row in rows:    
-#     internal_group = row['internal_group']
-#     account_type = mydict.get(internal_group)
-#     if internal_group:
-#         SQL="UPDATE account_account SET account_type=%s WHERE id=%s"
-#         cr_dst.execute(SQL,[account_type,row['id']])
-# cnx_dst.commit()
-# #******************************************************************************
+
+#** account_account : account_type ********************************************
+# Correspondance entre Odoo 14 (type, internal_group) et Odoo 18 (account_type)
+MAP_ODOO14_18 = {
+    # receivable
+    ('receivable', 'asset'): 'asset_receivable',
+    # payable
+    ('payable', 'liability'): 'liability_payable',
+    # liquidity
+    ('liquidity', 'asset'): 'asset_cash',
+    # other
+    ('other', 'asset'): 'asset_current',  # ou asset_fixed selon le code?
+    ('other', 'liability'): 'liability_current',  # ou liability_non_current selon le code?
+    ('other', 'expense'): 'expense',
+    ('other', 'income'): 'income',
+    ('other', 'off_balance'): None,  # Pas de correspondance directe
+}
+def get_account_type_18(type_14, internal_group_14):
+    """
+    Retourne le 'account_type' Odoo 18 à partir du type et internal_group Odoo 14.
+    """
+    return MAP_ODOO14_18.get((type_14, internal_group_14), None)
+SQL = """
+    select aa.id, aa.code, aat.type,aat.internal_group
+    from account_account aa join  account_account_type aat on aa.user_type_id=aat.id 
+"""
+cr_src.execute(SQL)
+rows = cr_src.fetchall()
+for row in rows:    
+    type_14 = row['type']
+    internal_group_14 = row['internal_group']
+    account_type = get_account_type_18(type_14, internal_group_14)
+    #print(row['code'], type_14, internal_group_14, account_type)
+    if account_type:
+        SQL="UPDATE account_account SET account_type=%s WHERE id=%s"
+        cr_dst.execute(SQL,[account_type,row['id']])
+cnx_dst.commit()
+#******************************************************************************
+
 
 
 
@@ -290,7 +417,6 @@ cnx_dst.commit()
 MigrationTable(db_src,db_dst,'account_full_reconcile')
 MigrationTable(db_src,db_dst,'account_partial_reconcile')
 MigrationTable(db_src,db_dst,'account_move_line_account_tax_rel')
-#MigrationTable(db_src,db_dst,'account_payment_method_line')
 default={
     'document_type': 'invoice',
 }
@@ -411,8 +537,8 @@ cnx_dst.commit()
 #******************************************************************************
 
 #** ir_default ****************************************************************
-SetDefaultValue(db_dst, 'res.partner', 'property_account_payable_id'   , '40110000')
-SetDefaultValue(db_dst, 'res.partner', 'property_account_receivable_id', '411101')
+SetDefaultValue(db_dst, 'res.partner', 'property_account_payable_id'   , '401100')
+SetDefaultValue(db_dst, 'res.partner', 'property_account_receivable_id', '411100')
 #******************************************************************************
 
 #** ir_property n'existe plus. Les champs sont de type jsonb maintenant *******
@@ -424,8 +550,8 @@ MigrationIrProperty2JsonField(db_src,db_dst,'res.partner', property_src='propert
 
 #** product_category **********************************************************
 MigrationTable(db_src,db_dst,'product_category')
-property_account_income_categ_id  = JsonAccountCode2Id(cr_dst,'70400100')
-property_account_expense_categ_id = JsonAccountCode2Id(cr_dst,'60100000')
+property_account_income_categ_id  = JsonAccountCode2Id(cr_dst,'707100')
+property_account_expense_categ_id = JsonAccountCode2Id(cr_dst,'607100')
 SQL="SELECT id FROM product_category"
 cr_dst.execute(SQL)
 rows = cr_dst.fetchall()
@@ -433,7 +559,6 @@ for row in rows:
     set_json_property(cr_dst,cnx_dst,'product_category', row['id'], 'property_account_income_categ_id' , 1, property_account_income_categ_id)
     set_json_property(cr_dst,cnx_dst,'product_category', row['id'], 'property_account_expense_categ_id', 1, property_account_expense_categ_id)
 #******************************************************************************
-
 
 #** Taxes à la vente et taxe fournisseur sur les articles *********************
 MigrationTable(db_src,db_dst,'product_taxes_rel')
@@ -632,6 +757,20 @@ MigrationTable(db_src,db_dst, "uom_uom",text2jsonb=True)
 #******************************************************************************
 
 
+#** product_template : Compte de revenus et de charges ************************
+SQL="SELECT id,name FROM product_template order by name"
+cr_src.execute(SQL)
+rows = cr_src.fetchall()
+for row in rows:
+    val = getPropertyValue(db_src,'product.template','property_account_income_id',row['id'])
+    if val:
+        set_json_property(cr_dst,cnx_dst,'product_template', row['id'], 'property_account_income_id' , 1, val)
+    val = getPropertyValue(db_src,'product.template','property_account_expense_id',row['id'])
+    if val:
+        set_json_property(cr_dst,cnx_dst,'product_template', row['id'], 'property_account_expense_id' , 1, val)
+#******************************************************************************
+
+
 #** res_company ***************************************************************
 SQL="""
     update res_company set account_sale_tax_id=null;
@@ -684,7 +823,7 @@ SQL="""
 """
 cr_dst.execute(SQL)
 cnx_dst.commit()
-SQL="SELECT date,name,partner_id,user_id FROM crm_phonecall WHERE  partner_id is not null order by id"
+SQL="SELECT date,name,partner_id,user_id,create_date,create_uid,write_date,write_uid FROM crm_phonecall WHERE  partner_id is not null order by id"
 cr_src.execute(SQL)
 rows = cr_src.fetchall()
 for row in rows:
@@ -698,13 +837,22 @@ for row in rows:
             res_model, 
             res_name, 
             summary, 
+            note, 
             date_deadline, 
             date_done, 
             automated, 
-            active
+            active,
+            create_date,
+            create_uid,
+            write_date,
+            write_uid
         )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """
+
+    summary = (row['name'] or '')[0:30]
+    note    = '<p>' + (row['name'] or '').replace('\n','<br/>') + '</p>'
+
     cr_dst.execute(SQL,[
         87,
         row['partner_id'],
@@ -713,14 +861,20 @@ for row in rows:
         row['user_id'],
         'res.partner',
         'res_name',
-        row['name'],
+        summary,
+        note,
         row['date'],
         row['date'],
         False,
         False,
+        row['create_date'],
+        row['create_uid'],
+        row['write_date'],
+        row['write_uid'],
     ])
 cnx_dst.commit()
 #******************************************************************************
+
 
 #** crm ***************************************************************
 MigrationTable(db_src,db_dst,"crm_lead")
