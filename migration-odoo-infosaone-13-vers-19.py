@@ -5,13 +5,6 @@ import os
 import json
 
 
-#TODO
-# - res.company
-# - ir_attachment
-# - Il faudra mettre en place une redirection pour la page contact pour Google car son url a changé
-# - Voir pourquou j'ai des menu en double dans website_menu
-
-
 #** Paramètres ****************************************************************
 db_src = "infosaone13"
 db_dst = "infosaone19"
@@ -27,7 +20,6 @@ lines=os.popen(cde).readlines() #Permet de repartir sur une base vierge si la mi
 #******************************************************************************
 
 
-
 cnx_src,cr_src=GetCR(db_src)
 cnx_dst,cr_dst=GetCR(db_dst)
 
@@ -36,9 +28,9 @@ cnx_dst,cr_dst=GetCR(db_dst)
 tables=[
     "website",
     "website_lang_rel",
-    "website_page",   # Migré plus tard après la gestion des vues (à cause des page_id)
-    #"website_track",   # Actvier plus tard pour ganger du temps de traitement
-    #"website_visitor", # Actvier plus tard pour ganger du temps de traitement
+    "website_page",
+    "website_track",   # Actvier plus tard pour ganger du temps de traitement
+    "website_visitor", # Actvier plus tard pour ganger du temps de traitement
     "blog_blog",
     "blog_post",
     "blog_tag",
@@ -51,13 +43,9 @@ for table in tables:
 #*******************************************************************************
 
 
-
 #** res_company ***************************************************************
 MigrationDonneesTable(db_src,db_dst,'res_company')
 #******************************************************************************
-
-
-
 
 
 # ** Correction des IDs de langue (fr_FR: 27 dans v13 -> 30 dans v19) *********
@@ -80,9 +68,6 @@ cnx_dst.commit()
 
 
 # ** Migration des pages website_page avec website_id=1 ***********************
-print("\n" + "="*70)
-print("Migration des pages website_page (website_id=1)")
-print("="*70)
 
 # Récupérer les pages avec website_id=1 dans Odoo 13
 SQL = """
@@ -92,7 +77,6 @@ SQL = """
 """
 cr_src.execute(SQL)
 pages_src = cr_src.fetchall()
-print(f"Trouvé {len(pages_src)} page(s) avec website_id=1 dans Odoo 13")
 
 # Mapping ancien view_id -> nouveau view_id
 page_view_mapping = {}
@@ -203,7 +187,6 @@ for old_view_id, new_view_id in page_view_mapping.items():
     cr_dst.execute(SQL, [new_view_id, old_view_id])
 
 cnx_dst.commit()
-print("Mise à jour terminée")
 #******************************************************************************
 
 
@@ -249,16 +232,19 @@ cnx_dst.commit()
 #******************************************************************************
 
 
+# #** Pièces jointes ************************************************************
+# #TODO : Cette solution utilisée habituellement n'a pas fonctionnée
+# # Je ne migre donc pas la table ir_attachment brutalement
+# MigrationTable(db_src,db_dst,'ir_attachment')
 
+# table="ir_attachment"
+# where="name='res.company.scss'"
+# CopieTable(db_vierge,db_dst,table,where)
+# #******************************************************************************
 
 
 #** Pièces jointes ************************************************************
-#print("Migration ir_attachment")
-#MigrationTable(db_src,db_dst,'ir_attachment')
-
-print("\n" + "="*70)
 print("Migration ir_attachment (INSERT INTO sélectif)")
-print("="*70)
 
 # Lister les colonnes disponibles dans Odoo 13
 SQL = """
@@ -269,16 +255,13 @@ SQL = """
 """
 cr_src.execute(SQL)
 columns_src = [row['column_name'] for row in cr_src.fetchall()]
-print(f"Colonnes disponibles dans Odoo 13: {', '.join(columns_src)}")
 
 # Lister les colonnes disponibles dans Odoo 19
 cr_dst.execute(SQL)
 columns_dst = [row['column_name'] for row in cr_dst.fetchall()]
-print(f"Colonnes disponibles dans Odoo 19: {', '.join(columns_dst)}")
 
 # Colonnes communes
 common_columns = set(columns_src) & set(columns_dst)
-print(f"\nColonnes communes: {len(common_columns)}")
 
 # Récupérer uniquement les attachments légitimes (pas les assets)
 # Utiliser uniquement les colonnes qui existent dans les deux versions
@@ -291,7 +274,6 @@ select_fields = [
 
 # Filtrer les champs qui existent réellement
 select_fields = [f for f in select_fields if f in columns_src]
-print(f"Champs à migrer: {', '.join(select_fields)}")
 
 SQL = f"""
     SELECT {', '.join(select_fields)}
@@ -314,7 +296,6 @@ SQL = f"""
 """
 cr_src.execute(SQL)
 attachments = cr_src.fetchall()
-print(f"\nTrouvé {len(attachments)} attachment(s) à migrer depuis Odoo 13")
 
 # Compteurs
 inserted = 0
@@ -402,7 +383,6 @@ for att in attachments:
         inserted += 1
         
         if inserted % 100 == 0:
-            print(f"  {inserted} attachments insérés...")
             cnx_dst.commit()
             
     except Exception as e:
