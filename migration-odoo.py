@@ -6,8 +6,8 @@ from migration_fonction import *
 #db_src = "opta-s12"
 #db_dst = "opta-s18"
 
-db_src = "infosaone13"
-db_dst = "infosaone19"
+db_src = "odoo-agenda14"
+db_dst = "odoo-agenda19"
 
 # db_src = "france-filets-communication13"
 # db_dst = "france-filets-communication18"
